@@ -23,10 +23,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 nav = st.sidebar.radio("Navigation", ["Home", "Diabetes", "Liver", "Dashboard", "About"])
+# Local backend URL
+BACKEND_URL = st.sidebar.text_input("Backend URL", value="http://localhost:8000")
 
-BACKEND_URL = st.sidebar.text_input("Backend URL", value="http://127.0.0.1:8000", help="Change if backend runs elsewhere")
-
+#BACKEND_URL = st.sidebar.text_input("Backend URL", value="https://ml-backend-two-disease.up.railway.app")
 # ---------------- About Page ----------------
+
 if nav == "About":
     st.markdown("""
     <div style="background: linear-gradient(135deg, #74b9ff, #a29bfe);
