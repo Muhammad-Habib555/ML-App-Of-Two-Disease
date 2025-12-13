@@ -8,30 +8,9 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.preprocessing import LabelEncoder
 from sklearn.pipeline import Pipeline
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
 
 from xgboost import XGBClassifier
-
-# =====================================================
-# Custom IQR-based Outlier Clipper
-# =====================================================
-class IQRClipper(BaseEstimator, TransformerMixin):
-    def __init__(self, factor=1.5):
-        self.factor = factor
-
-    def fit(self, X, y=None):
-        X = pd.DataFrame(X)
-        Q1 = X.quantile(0.25)
-        Q3 = X.quantile(0.75)
-        IQR = Q3 - Q1
-        self.lower_ = Q1 - self.factor * IQR
-        self.upper_ = Q3 + self.factor * IQR
-        return self
-
-    def transform(self, X):
-        X = pd.DataFrame(X)
-        return X.clip(self.lower_, self.upper_, axis=1)
 
 # =====================================================
 # Load & Clean Dataset
@@ -77,10 +56,8 @@ X = df[
     ]
 ]
 
-# 🔴 IMPORTANT FIX FOR XGBOOST
-# Convert labels from {1,2} → {0,1}
+# 🔴 Important: Convert labels from {1,2} → {0,1} for XGBoost
 y = df['Result'].map({1: 0, 2: 1})
-
 print("Target classes:", y.unique())
 
 # =====================================================
@@ -148,7 +125,6 @@ for name, (model, params) in models.items():
 
     pipeline = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='median')),
-        ('outliers', IQRClipper()),
         ('classifier', model)
     ])
 
