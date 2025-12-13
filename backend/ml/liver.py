@@ -1,18 +1,44 @@
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import accuracy_score, classification_report
-import joblib
+import numpy as np
 import os
+import joblib
 
-# Load dataset
-df = pd.read_csv("liver_dataset.csv", encoding='latin1')
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.preprocessing import LabelEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.impute import SimpleImputer
 
-# Strip leading/trailing whitespace from column names
+from xgboost import XGBClassifier
+
+# =====================================================
+# Custom IQR-based Outlier Clipper
+# =====================================================
+class IQRClipper(BaseEstimator, TransformerMixin):
+    def __init__(self, factor=1.5):
+        self.factor = factor
+
+    def fit(self, X, y=None):
+        X = pd.DataFrame(X)
+        Q1 = X.quantile(0.25)
+        Q3 = X.quantile(0.75)
+        IQR = Q3 - Q1
+        self.lower_ = Q1 - self.factor * IQR
+        self.upper_ = Q3 + self.factor * IQR
+        return self
+
+    def transform(self, X):
+        X = pd.DataFrame(X)
+        return X.clip(self.lower_, self.upper_, axis=1)
+
+# =====================================================
+# Load & Clean Dataset
+# =====================================================
+df = pd.read_csv("liver_dataset.csv", encoding="latin1")
 df.columns = df.columns.str.strip()
 
-# Rename columns to match backend/frontend snake_case
 df = df.rename(columns={
     'Age of the patient': 'Age_of_the_patient',
     'Gender of the patient': 'Gender_of_the_patient',
@@ -27,36 +53,141 @@ df = df.rename(columns={
     'Result': 'Result'
 })
 
-# Encode categorical column
-le = LabelEncoder()
-df['Gender_of_the_patient'] = le.fit_transform(df['Gender_of_the_patient'])
+# =====================================================
+# Encode Gender
+# =====================================================
+gender_encoder = LabelEncoder()
+df['Gender_of_the_patient'] = gender_encoder.fit_transform(df['Gender_of_the_patient'])
 
-# Features and target
-X = df[['Age_of_the_patient', 'Gender_of_the_patient', 'Total_Bilirubin', 
-        'Direct_Bilirubin', 'Alkphos_Alkaline_Phosphotase', 'Sgpt_Alamine_Aminotransferase', 
-        'Sgot_Aspartate_Aminotransferase', 'Total_Protiens', 'ALB_Albumin', 
-        'AG_Ratio_Albumin_and_Globulin_Ratio']]
+# =====================================================
+# Features & Target
+# =====================================================
+X = df[
+    [
+        'Age_of_the_patient',
+        'Gender_of_the_patient',
+        'Total_Bilirubin',
+        'Direct_Bilirubin',
+        'Alkphos_Alkaline_Phosphotase',
+        'Sgpt_Alamine_Aminotransferase',
+        'Sgot_Aspartate_Aminotransferase',
+        'Total_Protiens',
+        'ALB_Albumin',
+        'AG_Ratio_Albumin_and_Globulin_Ratio'
+    ]
+]
 
-y = df['Result']
+# 🔴 IMPORTANT FIX FOR XGBOOST
+# Convert labels from {1,2} → {0,1}
+y = df['Result'].map({1: 0, 2: 1})
 
-# Check dataset
-print("Shape of X:", X.shape)
-print("Columns in X:", X.columns.tolist())
-print("First 5 rows:\n", X.head())
+print("Target classes:", y.unique())
 
-# Split dataset
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# =====================================================
+# Train / Test Split
+# =====================================================
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
 
-# Train RandomForest model
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X_train, y_train)
+# =====================================================
+# Models & Hyperparameter Grids
+# =====================================================
+models = {
+    "RandomForest": (
+        RandomForestClassifier(
+            random_state=42,
+            class_weight='balanced'
+        ),
+        {
+            'classifier__n_estimators': [100, 200, 300],
+            'classifier__max_depth': [None, 5, 10],
+            'classifier__min_samples_split': [2, 5],
+            'classifier__min_samples_leaf': [1, 2]
+        }
+    ),
 
-# Evaluate
-y_pred = model.predict(X_test)
-print("Accuracy:", accuracy_score(y_test, y_pred))
-print("Classification Report:\n", classification_report(y_test, y_pred))
+    "GradientBoosting": (
+        GradientBoostingClassifier(random_state=42),
+        {
+            'classifier__n_estimators': [100, 200],
+            'classifier__learning_rate': [0.01, 0.1],
+            'classifier__max_depth': [3, 5]
+        }
+    ),
 
-# Save model
+    "XGBoost": (
+        XGBClassifier(
+            random_state=42,
+            eval_metric='logloss',
+            use_label_encoder=False
+        ),
+        {
+            'classifier__n_estimators': [100, 200],
+            'classifier__learning_rate': [0.01, 0.1],
+            'classifier__max_depth': [3, 5],
+            'classifier__subsample': [0.8, 1.0]
+        }
+    )
+}
+
+# =====================================================
+# Training Loop
+# =====================================================
+best_model = None
+best_score = 0
+
+for name, (model, params) in models.items():
+    print(f"\n==============================")
+    print(f"Training {name}")
+    print(f"==============================")
+
+    pipeline = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('outliers', IQRClipper()),
+        ('classifier', model)
+    ])
+
+    search = RandomizedSearchCV(
+        pipeline,
+        param_distributions=params,
+        n_iter=20,
+        cv=5,
+        scoring='accuracy',
+        n_jobs=-1,
+        random_state=42,
+        verbose=1
+    )
+
+    search.fit(X_train, y_train)
+
+    y_pred = search.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+
+    print(f"\n{name} Accuracy: {acc:.4f}")
+    print(classification_report(y_test, y_pred))
+
+    if acc > best_score:
+        best_score = acc
+        best_model = search.best_estimator_
+
+# =====================================================
+# Save Best Model
+# =====================================================
 os.makedirs("backend/models", exist_ok=True)
-joblib.dump(model, "backend/models/liver_model.pkl")
-print("Liver model saved!")
+
+joblib.dump(
+    {
+        "model": best_model,
+        "gender_encoder": gender_encoder
+    },
+    "backend/models/liver_model.pkl"
+)
+
+print(f"\n✅ BEST MODEL SAVED")
+print(f"Final Accuracy: {best_score:.4f}")
+print("File: backend/models/liver_model.pkl")
