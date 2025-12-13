@@ -22,10 +22,15 @@ except Exception as e:
     diabetes_model = None
 
 try:
-    liver_model = joblib.load("backend/models/liver_model.pkl")
+    liver_data = joblib.load("backend/models/liver_model.pkl")
+    liver_model = liver_data.get("model")
+    gender_encoder = liver_data.get("gender_encoder")
+    target_encoder = liver_data.get("target_encoder")  # optional if saved
 except Exception as e:
     print("Warning: couldn't load liver model:", e)
     liver_model = None
+    gender_encoder = None
+    target_encoder = None
 
 # ---------------- Schemas ----------------
 class DiabetesInput(BaseModel):
@@ -82,7 +87,6 @@ def predict_liver(payload: LiverInput):
     if liver_model is None:
         raise HTTPException(status_code=503, detail="Liver model not loaded.")
 
-    # Use snake_case column names exactly as in your trained model
     df = pd.DataFrame([{
         "Age_of_the_patient": payload.Age_of_the_patient,
         "Gender_of_the_patient": payload.Gender_of_the_patient,
@@ -98,6 +102,11 @@ def predict_liver(payload: LiverInput):
 
     try:
         pred = liver_model.predict(df)
+
+        # If a target encoder is available, decode prediction back to original labels
+        if target_encoder is not None:
+            pred = target_encoder.inverse_transform(pred)
+
         prob = liver_model.predict_proba(df).tolist() if hasattr(liver_model, "predict_proba") else None
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error predicting liver disease: {e}")
