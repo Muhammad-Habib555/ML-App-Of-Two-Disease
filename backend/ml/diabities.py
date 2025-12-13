@@ -1,32 +1,15 @@
 import pandas as pd
 import numpy as np
+
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score, classification_report
-from sklearn.base import BaseEstimator, TransformerMixin
 import joblib
-
+ 
 from xgboost import XGBClassifier
-
-# =========================
-# Custom Outlier Remover
-# =========================
-class IQRClipper(BaseEstimator, TransformerMixin):
-    def __init__(self, factor=1.5):
-        self.factor = factor
-
-    def fit(self, X, y=None):
-        X = pd.DataFrame(X)
-        self.lower_bounds_ = X.quantile(0.25) - self.factor * (X.quantile(0.75) - X.quantile(0.25))
-        self.upper_bounds_ = X.quantile(0.75) + self.factor * (X.quantile(0.75) - X.quantile(0.25))
-        return self
-
-    def transform(self, X):
-        X = pd.DataFrame(X)
-        return X.clip(self.lower_bounds_, self.upper_bounds_, axis=1)
 
 # =========================
 # Load Dataset
@@ -42,13 +25,11 @@ numeric_features = X.drop(columns=categorical_features).columns
 
 # =========================
 # Preprocessing Pipeline
+# (NO OUTLIER REMOVAL)
 # =========================
 preprocessor = ColumnTransformer(
     transformers=[
-        ('num', Pipeline([
-            ('outliers', IQRClipper())
-        ]), numeric_features),
-
+        ('num', 'passthrough', numeric_features),
         ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
     ]
 )
@@ -60,10 +41,9 @@ models = {
     "RandomForest": (
         RandomForestClassifier(random_state=42),
         {
-            'classifier__n_estimators': [100, 200, 300],
+            'classifier__n_estimators': [100, 200],
             'classifier__max_depth': [None, 5, 10],
-            'classifier__min_samples_split': [2, 5],
-            'classifier__min_samples_leaf': [1, 2]
+            'classifier__min_samples_split': [2, 5]
         }
     ),
 
